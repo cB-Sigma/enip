@@ -1,13 +1,17 @@
 # enip
 
-An EtherNet/IP client with CIP explicit messaging in pure Go, for Logix controller tags and CIP object attributes.
+EtherNet/IP in pure Go: a client (scanner) and an adapter (server) for Logix controller tags, tag browsing, structures, CIP object attributes and class 1 implicit I/O.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/cB-Sigma/enip.svg)](https://pkg.go.dev/github.com/cB-Sigma/enip) [![test](https://github.com/cB-Sigma/enip/actions/workflows/test.yml/badge.svg)](https://github.com/cB-Sigma/enip/actions/workflows/test.yml) [![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](LICENSE) [![Go](https://img.shields.io/badge/go-1.22-00ADD8.svg)](go.mod)
 
 The module reads and writes Logix controller tags by name and reads and
 sets CIP object attributes on any CIP device, over a class 3 connection
 (Forward Open or Large Forward Open) or unconnected, directly or through
-a backplane route. It discovers devices with ListIdentity over UDP. It
+a backplane route. It discovers devices with ListIdentity over UDP.
+Since v0.2.0 it browses a controller's tags and structure definitions
+(`ListTags`, `ReadTemplate`), runs class 1 I/O as a scanner (`OpenIO`),
+and the `server` package is the adapter role: a Logix-like target with
+tags, structures, browsing, member access and class 1 assemblies. It
 has no cgo and no dependency beyond the standard library and
 [lanbcast](https://github.com/cB-Sigma/lanbcast). It was written for
 SigmaM2M, a oneM2M platform, where it serves the EtherNet/IP
@@ -22,14 +26,12 @@ integration; it does not depend on it.
 | Forward Open, Large Forward Open, Forward Close; class 3 connected messaging; reconnection after the target drops an idle connection; fallback to unconnected | yes (tested against cpppo) |
 | Multiple Service Packet (`ReadTags`) | yes (tested against cpppo) |
 | Logix Read Tag, Write Tag, Read Tag Fragmented, Write Tag Fragmented; program-scoped tags, members, array indexes | yes (tested against cpppo) |
-| Types: atomic types, STRING, structures as raw bytes or by named member offsets | yes; Logix STRING and structures only against this module's simulator |
+| Types: atomic types, STRING, structures as raw bytes, by named member offsets, or decoded through their template (`Template.DecodeStruct`, nested structures, packed BOOLs, STRING members) | yes (Logix STRING and structures tested against pycomm3 1.2.16, which read and wrote them on this module's adapter) |
 | Get_Attribute_Single, Get_Attributes_All, Set_Attribute_Single; any other service through `Do` | yes |
 | Status texts for general and extended CIP status and encapsulation status | yes |
-| Tag browsing (symbol and template objects), UDT definitions | no |
-| Read-Modify-Write | no |
-| Implicit (class 0/1) I/O messaging | no |
-| ListServices, ListInterfaces, CIP Security (TLS/DTLS) | no |
-| PCCC (SLC, PLC-5, MicroLogix), Modbus | no |
+| Tag browsing: the Symbol object's tag list, controller and program scope, paged (`ListTags`); structure definitions from the Template object (`ReadTemplate`) | yes (since v0.2.0; client side against this module's adapter only, see Not yet) |
+| Adapter (server) role (`server`): tag table with program scopes, structures (`DefineStruct`, `CheckStruct`), member access ("Tag.Member.Sub", BOOL bits), the Symbol and Template objects, symbol instance addressing, class 3 connections, Multiple Service Packet, fragmentation, attributes, ListIdentity | yes (since v0.2.0; was enip-sim's; pycomm3 1.2.16 browsed and used it) |
+| Implicit (class 1) I/O: scanner (`OpenIO`: Forward Open on assembly connection points, cyclic O→T with the run/idle header, T→O inputs, timeouts) and adapter (`AddAssembly`, `SetAssembly`, `Assembly`) | yes (since v0.2.0; scanner and adapter against each other only, see Not yet) |
 
 ## Choosing an EtherNet/IP library
 
@@ -44,17 +46,18 @@ below. Check the projects themselves before relying on a row.
 | Logix tag read and write, fragmented | yes (tested against cpppo) | yes | yes (tested against this module's simulator) | yes | yes |
 | Multiple Service Packet | yes | yes | yes | yes | yes |
 | Large Forward Open | yes | yes | yes | yes | yes |
-| Tag browsing, UDT definitions | no | yes | yes | not checked | yes (tag listing) |
-| Implicit I/O | no | yes (server side) | no | not checked | not checked |
-| Server or simulator | separate module ([enip-sim](https://github.com/cB-Sigma/enip-sim)) | yes (a Logix-like server) | no | yes (tested) | no |
+| Tag browsing, UDT definitions | yes | yes | yes | not checked | yes (tag listing) |
+| Implicit I/O | yes, scanner and adapter | yes (server side) | no | not checked | not checked |
+| Server (adapter) | yes, with browsing (tested with pycomm3); simulator in [enip-sim](https://github.com/cB-Sigma/enip-sim) | yes (a Logix-like server) | no | yes (tested) | no |
 | PCCC, other PLC families | no | not checked | SLC/PLC-5 (PCCC) | not checked | yes |
 
-Pick gologix when you need tag browsing, UDTs by definition or implicit
-I/O in Go and can follow a beta API; pick libplctag when cgo is fine
-and you need PCCC or many PLC families; pick pycomm3 in Python. Pick this
-module for a Go program without cgo that reads and writes known tags and
-CIP attributes, connected or not, through routes, with simulator-backed
-tests in Go.
+Pick this module for a Go program without cgo that reads, writes and
+browses Logix tags and structures, CIP attributes and class 1 I/O, or
+that must act as an EtherNet/IP adapter a Logix-style client can browse.
+Pick gologix if its I/O server has been checked against your scanner
+(this module's I/O is not yet checked against another implementation);
+pick libplctag when cgo is fine and you need PCCC or many PLC families;
+pick pycomm3 in Python.
 
 ## Install
 
@@ -78,7 +81,22 @@ err = c.WriteTag(ctx, "Setpoint", enip.Type{Code: enip.TypeREAL}, 1, b)
 id, err := c.ListIdentity(ctx)
 ```
 
-The runnable examples in this module are `ExampleEncodeString` and
+Browsing and the adapter (v0.2.0):
+
+```go
+tags, _ := c.ListTags(ctx, "")              // controller scope; ListTags(ctx, "Main") for a program
+tmpl, _ := c.ReadTemplate(ctx, tags[0].Template)
+_, data, _ := c.ReadTag(ctx, tags[0].Name, 1)
+v, _ := tmpl.DecodeStruct(data, nil)       // map of member name to value
+
+s := server.New()
+s.DefineStruct(server.StructDef{Name: "Motor", Handle: 0x2002, Size: 8, Fields: fields})
+s.SetTag("Pump", enip.Type{Code: enip.TypeStruct, Handle: 0x2002}, 1, raw)
+s.Start(":44818")
+```
+
+`TestListTagsAndTemplates` and `TestImplicitIO` (server/) run these. The
+runnable examples in this module are `ExampleEncodeString` and
 `ExampleRoute`; enip-sim has a client example against the simulated
 controller.
 
@@ -89,7 +107,9 @@ API reference: https://pkg.go.dev/github.com/cB-Sigma/enip
 | Package | What it does |
 |---|---|
 | `enip` (module root) | `Client` (`ReadTag`, `ReadTags`, `WriteTag`, `GetAttribute`, `SetAttribute`, `ListIdentity`, `Do`, `Mode`), `Discover`, `Route`, `TagPath`, `Decode`/`Encode` with `Type` and `Member`, `DecodeString`/`EncodeString`, `ParseTypeName`, `AtomicTypeCode`, the encapsulation and CIP codecs (`Header`, `Item`, `Request`, `Response`, `Error`, `StatusText`) |
-| `interop` (nested module, tests only) | this module's client against cpppo 5.2.5 in Docker |
+| `enip` (v0.2.0 additions) | `ListTags`, `TagInfo`, `ReadTemplate`, `Template`, `TemplateMember`, `DecodeStruct`; `OpenIO`, `IOConfig`, `IOConn`, `IOPacket`, `ParseIOPacket` |
+| `server` | the adapter role: `New`, `Server` (`SetTag`, `SetReadOnly`, `SetAttr`, `SetIdentity`, `DefineStruct`, `CheckStruct`, `AddAssembly`, `SetAssembly`, `Assembly`, `Start`, `Stop`, …), `StructDef`, `Field`, `StringDef` |
+| `interop` (nested module, tests only) | this module's client against cpppo 5.2.5, and pycomm3 1.2.16 against the adapter, in Docker |
 
 ## Testing
 
@@ -141,15 +161,46 @@ any unrouted unconnected service 0x52 as Unconnected Send, so a
 fragmented read sent straight to it, unrouted and unconnected, cannot be
 tested; it wants a pad octet after an odd-length CIP STRING in a write.
 
+pycomm3 1.2.16's LogixDriver against this module's adapter role
+(2026-10-12, python:3.12.10-slim in Docker; `interop/pycomm3_test.go`,
+our script in `interop/pycomm3`), opened with its own tag upload
+(`init_tags`, `init_program_tags`); every item passed:
+
+| Area | What was checked |
+|---|---|
+| Browsing | its tag list of controller and program scope (5 user tags, the program entry recognised); the Motor UDT's template (members in order, 116 bytes, a nested PID and a STRING member, packed BOOLs in a hidden host byte); the built-in STRING's template (82 characters) |
+| Reads | the whole UDT decoded by pycomm3 (BOOLs, REAL, DINT[3], nested structure, STRING), a member, a STRING tag, a program-scoped DINT and an INT[10], by symbol instance (pycomm3 chose instance addressing) |
+| Writes | a REAL member, a BOOL member (the bit in the host byte), a STRING tag and a program-scoped tag, read back by pycomm3 and checked in the adapter's bytes; a read-only tag refused with Permission denied |
+
+Found on the way (in this module's own test, not in pycomm3): the test's
+UDT had a member overlapping the next; `CheckStruct` now reports such
+layouts (`TestCheckStruct`).
+
 Not tested against an independent implementation:
 
-- Logix STRING (type 0x0FCE) and structures: cpppo has neither.
+- This module's `ListTags` and `ReadTemplate` against another adapter
+  (cpppo has no Symbol or Template object; a real controller is
+  hardware).
+- Class 1 I/O: scanner and adapter are tested against each other only.
+  gologix's I/O server binds UDP 2222 itself, which a scanner on the
+  same host cannot share; a run in separate containers is next.
 - Whether a route inside the Forward Open path is checked (cpppo checks
   routes on Unconnected Send only).
 - Real controllers (ControlLogix, CompactLogix) and other CIP devices.
 - In process: the simulated controller of enip-sim (same author, so not
   independent). pycomm3 1.2.16 is run against that simulator in
   enip-sim's interop tests.
+
+## Not yet
+
+| What | Why |
+|---|---|
+| Class 1 I/O against another implementation (gologix's server, a real adapter) | see above; planned with both peers in containers |
+| Class 0 and multicast T→O, input-only and listen-only connections, Forward Close of I/O connections, configuration assembly data in the Forward Open | the point-to-point class 1 case comes first; these follow |
+| ListServices, ListInterfaces, CIP Security (TLS and DTLS) | not started |
+| PCCC (SLC, PLC-5, MicroLogix), Modbus | not started |
+| Read-Modify-Write | not started |
+| Real controllers | needs hardware |
 
 ## Related repositories
 

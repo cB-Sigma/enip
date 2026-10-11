@@ -46,6 +46,11 @@ EtherNet/IP server as a separate process. No cpppo source is included in
 this repository or linked into this module; the image is not
 distributed.
 
+interop/pycomm3/Dockerfile installs pycomm3 1.2.16
+(https://github.com/ottowayi/pycomm3, Copyright Ian Ottoway, MIT) from
+PyPI into a python:3.12.10-slim image at test time; browse.py there is
+our own script calling it. Nothing of pycomm3 is included here.
+
 Test data
 ---------
 

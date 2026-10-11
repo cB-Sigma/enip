@@ -24,6 +24,18 @@ enip-sim (with `git mv`), so this module does not depend on its
 simulator, and the cpppo interop tests (interop/) were added. They found
 the defect fixed in v0.1.0 (CHANGELOG.md).
 
+For v0.2.0 (2026-10-12) the simulated controller's adapter code moved
+from enip-sim into the `server` package (same author; the demo tag table
+stayed in the simulator), and new code was written in our own words:
+tag browsing on both sides (the Symbol object's instance attribute list
+and the Template object's attributes and definition), member access,
+symbol instance addressing, `CheckStruct`, and class 1 I/O on both sides
+(io.go, server/io.go). The browsing wire layout is what Logix
+controllers serve; it was taken as facts from the ODVA and Rockwell
+publications and checked by running pycomm3 1.2.16 against the adapter.
+pycomm3's source was read to see which attributes and services its tag
+upload asks for; no code was taken from it.
+
 ## Status texts
 
 `StatusText`, `ExtStatusText` and `EncapStatusText` give each code a
