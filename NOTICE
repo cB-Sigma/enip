@@ -1,0 +1,53 @@
+enip (EtherNet/IP and CIP explicit messaging client, in Go)
+Copyright 2026 Abhinav Gautam
+
+This module is licensed under the Apache License, Version 2.0 (LICENSE).
+
+The code was written for SigmaM2M, a oneM2M platform (PROVENANCE.md). It
+contains no code from other projects. The source files that come from
+SigmaM2M (cip.go, encap.go, types.go, client.go and the codec test)
+carry no per-file copyright header, the convention of the code they come
+from; the copyright line above covers them. Files added for this module
+carry "Copyright 2026 Abhinav Gautam" and
+"SPDX-License-Identifier: Apache-2.0".
+
+Specifications
+--------------
+
+The ODVA CIP Networks Library (volumes 1 and 2) and Rockwell
+Automation's Logix 5000 data access manual are not redistributed.
+Command, service, status, type and segment codes and the octet layouts
+are facts, written in our own words; no text of those documents is
+reproduced.
+
+Trademarks
+----------
+
+EtherNet/IP and CIP are trademarks of ODVA, Inc. Logix, ControlLogix and
+CompactLogix are trademarks of Rockwell Automation, Inc. They are used
+here only to say which protocols and devices this module talks to. This
+project is not made, affiliated with, sponsored or endorsed by ODVA or
+Rockwell Automation, and makes no claim of ODVA conformance.
+
+Dependencies
+------------
+
+- github.com/cB-Sigma/lanbcast (Apache-2.0, Copyright 2026 Abhinav
+  Gautam): LAN broadcasts for Discover.
+- The Go standard library (BSD-3-Clause, Copyright The Go Authors).
+
+Interop test peer (interop/, not part of the module's packages)
+---------------------------------------------------------------
+
+The nested test-only module interop/ installs cpppo 5.2.5
+(https://github.com/pjkundert/cpppo, Copyright Perry Kundert, GPL) from
+PyPI into a Docker container on the tester's machine and runs its
+EtherNet/IP server as a separate process. No cpppo source is included in
+this repository or linked into this module; the image is not
+distributed.
+
+Test data
+---------
+
+Every tag name, value, serial number, address and product name in the
+tests and examples is a made-up demo value.
