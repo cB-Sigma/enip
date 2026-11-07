@@ -74,7 +74,7 @@ func (s *Server) IOConnections() int {
 // isClass1Open reports a (Large) Forward Open of transport class 1.
 func isClass1Open(msg []byte) bool {
 	svc, path, d, err := enip.ParseRequest(msg)
-	if err != nil || string(path) != string(cmPath) || (svc != enip.SvcForwardOpen && svc != enip.SvcLargeForwardOpen) {
+	if err != nil || !isObject(path, enip.ClassConnectionManager) || (svc != enip.SvcForwardOpen && svc != enip.SvcLargeForwardOpen) {
 		return false
 	}
 	n := foFixed(svc)

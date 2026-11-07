@@ -478,8 +478,12 @@ func (s *Server) sendData(cmd uint16, body []byte, remote net.Addr) ([]byte, err
 		enip.Item{Type: enip.ItemConnectedData, Data: out}), nil
 }
 
-var cmPath = enip.Logical(enip.ClassConnectionManager, 1, -1)
-var mrPath = enip.Logical(enip.ClassMessageRouter, 1, -1)
+// isObject reports a request path naming instance 1 of class (and no
+// attribute), whatever the width of its logical segments.
+func isObject(path []byte, class uint16) bool {
+	c, inst, attr, ok := parseLogical(path)
+	return ok && c == class && inst == 1 && attr < 0
+}
 
 // handle answers one CIP message that arrived unconnected (SendRRData) or
 // over a class 3 connection of the given size (SendUnitData).
@@ -492,7 +496,7 @@ func (s *Server) handle(msg []byte, connected bool, size int) []byte {
 	if connected {
 		limit = size - 2
 	}
-	if string(path) == string(cmPath) {
+	if isObject(path, enip.ClassConnectionManager) {
 		switch svc {
 		case enip.SvcUnconnectedSend:
 			return s.unconnectedSend(data)
@@ -505,7 +509,7 @@ func (s *Server) handle(msg []byte, connected bool, size int) []byte {
 	}
 	if !connected && s.RequireRoute {
 		// The Ethernet module itself has no tags or user objects.
-		if len(path) > 0 && path[0] == 0x91 || string(path) == string(mrPath) {
+		if len(path) > 0 && path[0] == 0x91 || isObject(path, enip.ClassMessageRouter) {
 			return enip.MarshalResponse(svc, enip.StatusPathUnknown, nil, nil)
 		}
 	}
@@ -535,7 +539,7 @@ func (s *Server) route(svc byte, path, data []byte, limit int) []byte {
 	}
 	tagSvc := svc == enip.SvcReadTag || svc == enip.SvcWriteTag || svc == enip.SvcReadTagFragmented || svc == enip.SvcWriteTagFragmented
 	switch {
-	case svc == enip.SvcMultipleService && string(path) == string(mrPath):
+	case svc == enip.SvcMultipleService && isObject(path, enip.ClassMessageRouter):
 		return s.multiple(data, limit)
 	case len(path) > 0 && path[0] == 0x91:
 		return s.tagService(svc, path, data, limit)
@@ -570,7 +574,7 @@ func (s *Server) forwardOpen(svc byte, d []byte) []byte {
 		paramLen = 4
 	}
 	fixed := 2 + 4 + 4 + 2 + 2 + 4 + 4 + 2*(4+paramLen) + 1 + 1
-	if len(d) < fixed {
+	if len(d) < fixed || len(d) < fixed+int(d[fixed-1])*2 {
 		return enip.MarshalResponse(svc, enip.StatusNotEnoughData, nil, nil)
 	}
 	ident := d[10:18] // serial, vendor, originator serial
@@ -586,12 +590,17 @@ func (s *Server) forwardOpen(svc byte, d []byte) []byte {
 	} else {
 		size = int(le.Uint32(d[22+4:]) & 0xFFFF)
 	}
+	// The connection path: [port 1, CPU slot] then the Message Router.
 	path := d[fixed : fixed+int(d[fixed-1])*2]
-	want := mrPath
-	if s.RequireRoute || len(path) > len(mrPath) {
-		want = append([]byte{0x01, s.Slot}, mrPath...)
+	if len(path) >= 2 && path[0] == 0x01 {
+		if path[1] != s.Slot {
+			return fail(0x0315)
+		}
+		path = path[2:]
+	} else if s.RequireRoute {
+		return fail(0x0315)
 	}
-	if string(path) != string(want) {
+	if !isObject(path, enip.ClassMessageRouter) {
 		return fail(0x0315)
 	}
 	rpi := time.Duration(le.Uint32(d[22:])) * time.Microsecond
