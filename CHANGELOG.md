@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.1 (2026-11-07)
 
 Fixes to the adapter (`server`), all found by @boeboe with the
 otfabric/ethernetip-interop cross-stack harness. No API is removed;
