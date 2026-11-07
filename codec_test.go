@@ -71,7 +71,7 @@ func TestENIPEncapsulation(t *testing.T) {
 		t.Fatalf("list identity = %v, %v", ids, err)
 	}
 	want2 := id
-	want2.Revision, want2.Serial = "33.011", "00C0FFEE"
+	want2.Revision, want2.Major, want2.Minor, want2.Serial = "33.011", 33, 11, "00C0FFEE"
 	if ids[0] != want2 {
 		t.Errorf("identity = %+v\nwant %+v", ids[0], want2)
 	}

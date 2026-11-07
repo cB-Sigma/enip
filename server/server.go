@@ -14,6 +14,7 @@ package server
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"net"
 	"strings"
@@ -123,7 +124,9 @@ func New() *Server {
 }
 
 // SetIdentity changes the identity object's vendor, device type, product
-// code, product name and serial number.
+// code, revision, product name and serial number. The revision is
+// id.Major and id.Minor, or id.Revision ("20.11") when both are zero;
+// with neither it stays 33.11.
 func (s *Server) SetIdentity(id enip.Identity, serial uint32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -341,7 +344,21 @@ func (s *Server) identityBody() []byte {
 	host, _, _ := net.SplitHostPort(s.addr)
 	id.IP = host
 	id.Port = enip.DefaultPort
-	return enip.MarshalCPF(enip.Item{Type: enip.ItemIdentity, Data: enip.IdentityItem(id, 33, 11, s.serialNum)})
+	major, minor := s.revision()
+	return enip.MarshalCPF(enip.Item{Type: enip.ItemIdentity, Data: enip.IdentityItem(id, major, minor, s.serialNum)})
+}
+
+// revision is the identity object's revision (attribute 4); s.mu held.
+func (s *Server) revision() (major, minor uint8) {
+	id := s.identity
+	if id.Major != 0 || id.Minor != 0 {
+		return id.Major, id.Minor
+	}
+	var ma, mi int
+	if n, _ := fmt.Sscanf(id.Revision, "%d.%d", &ma, &mi); n == 2 && ma >= 0 && ma <= 255 && mi >= 0 && mi <= 255 {
+		return uint8(ma), uint8(mi)
+	}
+	return 33, 11
 }
 
 func (s *Server) serve(c net.Conn) {
@@ -793,7 +810,8 @@ func (s *Server) identityAttr(a int) []byte {
 	case 3:
 		return le.AppendUint16(nil, id.ProductCode)
 	case 4:
-		return []byte{33, 11}
+		major, minor := s.revision()
+		return []byte{major, minor}
 	case 5:
 		return le.AppendUint16(nil, id.Status)
 	case 6:

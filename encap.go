@@ -184,11 +184,14 @@ type Identity struct {
 	Vendor      uint16 `json:"vendor"`
 	DeviceType  uint16 `json:"deviceType"`
 	ProductCode uint16 `json:"productCode"`
-	Revision    string `json:"revision"`
-	Status      uint16 `json:"status"`
-	Serial      string `json:"serial"`
-	ProductName string `json:"productName"`
-	State       uint8  `json:"state"`
+	// Revision is the revision as text ("major.minor", minor three
+	// digits); Major and Minor are its two parts.
+	Revision     string `json:"revision"`
+	Major, Minor uint8  `json:"-"`
+	Status       uint16 `json:"status"`
+	Serial       string `json:"serial"`
+	ProductName  string `json:"productName"`
+	State        uint8  `json:"state"`
 }
 
 // IdentityItem encodes an identity item's data (socket address fields are
@@ -226,7 +229,8 @@ func ParseIdentity(b []byte) (Identity, error) {
 	id.Vendor = binary.LittleEndian.Uint16(b[18:])
 	id.DeviceType = binary.LittleEndian.Uint16(b[20:])
 	id.ProductCode = binary.LittleEndian.Uint16(b[22:])
-	id.Revision = fmt.Sprintf("%d.%03d", b[24], b[25])
+	id.Major, id.Minor = b[24], b[25]
+	id.Revision = fmt.Sprintf("%d.%03d", id.Major, id.Minor)
 	id.Status = binary.LittleEndian.Uint16(b[26:])
 	id.Serial = fmt.Sprintf("%08X", binary.LittleEndian.Uint32(b[28:]))
 	n := int(b[32])
