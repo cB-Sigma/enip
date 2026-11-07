@@ -5,7 +5,9 @@ package server_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"net"
 	"testing"
 	"time"
 
@@ -86,5 +88,55 @@ func TestImplicitIO(t *testing.T) {
 	time.Sleep(600 * time.Millisecond)
 	if n := s.IOConnections(); n != 0 {
 		t.Errorf("%d I/O connections after the scanner stopped", n)
+	}
+}
+
+// An originator that repeats the CIP sequence count (unchanged outputs)
+// while the encapsulation sequence number goes up keeps its connection
+// alive; a repeated encapsulation sequence number is a duplicate and a
+// new CIP sequence count brings new data (issue #8).
+func TestIOWatchdogWithRepeatedSequenceCount(t *testing.T) {
+	s := server.New()
+	s.IOAddr = "127.0.0.1:0"
+	s.AddAssembly(100, 8)
+	s.AddAssembly(150, 4)
+	s.AddAssembly(1, 0)
+	c := startServer(t, s)
+	rpi := 10 * time.Millisecond // times out after 16 × RPI = 160 ms
+	r, err := c.Do(ctx(t), enip.SvcForwardOpen, enip.Logical(enip.ClassConnectionManager, 1, -1), class1Open(0x4242, rpi))
+	if err != nil || r.Status != 0 || len(r.Data) < 4 {
+		t.Fatalf("class 1 Forward Open: %+v, %v", r, err)
+	}
+	ot := binary.LittleEndian.Uint32(r.Data)
+	pc, err := net.DialUDP("udp4", nil, s.IOUDPAddr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	data := []byte{1, 0, 0, 0, 0xA, 0xB, 0xC, 0xD} // run, then the outputs
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for es := uint32(1); time.Now().Before(deadline); es++ {
+		if _, err := pc.Write(enip.IOPacket(ot, es, 1, data)); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(rpi)
+	}
+	if n := s.IOConnections(); n != 1 {
+		t.Fatalf("%d I/O connections after 500 ms of packets with the same CIP sequence count", n)
+	}
+	if out, run := s.Assembly(150); !run || !bytes.Equal(out, []byte{0xA, 0xB, 0xC, 0xD}) {
+		t.Errorf("outputs %x run=%v", out, run)
+	}
+	// A duplicate (an old encapsulation sequence number) is not applied;
+	// a new CIP sequence count is.
+	_, _ = pc.Write(enip.IOPacket(ot, 1, 2, []byte{1, 0, 0, 0, 9, 9, 9, 9}))
+	time.Sleep(50 * time.Millisecond)
+	if out, _ := s.Assembly(150); out[0] != 0xA {
+		t.Errorf("a duplicate packet was applied: %x", out)
+	}
+	_, _ = pc.Write(enip.IOPacket(ot, 1<<16, 2, []byte{0, 0, 0, 0, 9, 9, 9, 9}))
+	time.Sleep(50 * time.Millisecond)
+	if out, run := s.Assembly(150); run || out[0] != 9 {
+		t.Errorf("new data was not applied: %x run=%v", out, run)
 	}
 }

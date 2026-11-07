@@ -24,11 +24,15 @@ type ioConn struct {
 	in, out      uint16 // consumed (O→T) and produced (T→O) assemblies
 	peer         *net.UDPAddr
 	rpi, timeout time.Duration
-	last         time.Time
+	last         time.Time // when the last O→T packet arrived
 	run          bool
-	lastSeq      uint16
-	seen         bool
-	stop         chan struct{}
+	// lastEncap is the encapsulation sequence number of the last O→T
+	// packet (orders packets) and lastSeq its CIP sequence count (changes
+	// with the data); seen is set once a packet arrived.
+	lastEncap uint32
+	lastSeq   uint16
+	seen      bool
+	stop      chan struct{}
 }
 
 // AddAssembly creates an assembly instance of size bytes (zeroed).
@@ -231,16 +235,24 @@ func (s *Server) serveIO(pc *net.UDPConn) {
 		if err != nil {
 			return
 		}
-		id, _, cs, data, err := enip.ParseIOPacket(buf[:n])
+		id, es, cs, data, err := enip.ParseIOPacket(buf[:n])
 		if err != nil || len(data) < 4 {
 			continue
 		}
 		s.mu.Lock()
 		c := s.ioConns[id]
-		if c != nil && (!c.seen || int16(cs-c.lastSeq) > 0) {
-			c.seen, c.lastSeq, c.last = true, cs, time.Now()
-			c.run = binary.LittleEndian.Uint32(data)&1 != 0
-			copy(s.assemblies[c.in], data[4:])
+		// Every packet in order (by the encapsulation sequence number)
+		// keeps the connection alive; a repeated or older one is dropped.
+		// The CIP sequence count changes only with the data: a packet
+		// that repeats it carries no new data (an originator sending
+		// unchanged outputs at every RPI), not a packet to ignore.
+		if c != nil && (!c.seen || int32(es-c.lastEncap) > 0) {
+			if !c.seen || int16(cs-c.lastSeq) > 0 {
+				c.lastSeq = cs
+				c.run = binary.LittleEndian.Uint32(data)&1 != 0
+				copy(s.assemblies[c.in], data[4:])
+			}
+			c.seen, c.lastEncap, c.last = true, es, time.Now()
 		}
 		s.mu.Unlock()
 	}
