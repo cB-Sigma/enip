@@ -196,7 +196,7 @@ Not tested against an independent implementation:
 | What | Why |
 |---|---|
 | Class 1 I/O against another implementation (gologix's server, a real adapter) | see above; planned with both peers in containers |
-| Class 0 and multicast T→O, input-only and listen-only connections, Forward Close of I/O connections, configuration assembly data in the Forward Open | the point-to-point class 1 case comes first; these follow |
+| Class 0 and multicast T→O, input-only and listen-only connections, a Forward Close sent by the scanner when it closes an I/O connection (the adapter answers one), configuration assembly data in the Forward Open | the point-to-point class 1 case comes first; these follow |
 | ListServices, ListInterfaces, CIP Security (TLS and DTLS) | not started |
 | PCCC (SLC, PLC-5, MicroLogix), Modbus | not started |
 | Read-Modify-Write | not started |
