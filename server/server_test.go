@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -248,4 +250,52 @@ func TestUnconnectedSendEmptyRoute(t *testing.T) {
 		}
 		s.Stop()
 	}
+}
+
+// The ListIdentity item's socket address is the port the adapter listens
+// on and the interface the request arrived on, not the listen address
+// 0.0.0.0 and port 44818 (issue #6).
+func TestListIdentitySocketAddress(t *testing.T) {
+	s := server.New()
+	if err := s.Start("0.0.0.0:0"); err != nil {
+		t.Skip("cannot listen on every interface:", err)
+	}
+	defer s.Stop()
+	_, port, _ := net.SplitHostPort(s.Addr())
+	c := &enip.Client{Addr: "127.0.0.1:" + port, Timeout: 2 * time.Second}
+	defer c.Close()
+	id, err := c.ListIdentity(ctx(t))
+	if err != nil || id.IP != "127.0.0.1" || id.Port != uint16(mustAtoi(t, port)) {
+		t.Errorf("over TCP: %+v, %v (listening on %s)", id, err, s.Addr())
+	}
+
+	// Over UDP, as a client that takes the device address from the item.
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	h := enip.Header{Command: enip.CmdListIdentity}
+	if _, err := pc.WriteToUDP(h.Marshal(nil), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: mustAtoi(t, port)}); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 1500)
+	_ = pc.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _, err := pc.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := enip.ParseListIdentity(buf[enip.HeaderLen:n])
+	if err != nil || len(ids) != 1 || ids[0].IP != "127.0.0.1" || ids[0].Port != uint16(mustAtoi(t, port)) {
+		t.Errorf("over UDP: %+v, %v (listening on %s)", ids, err, s.Addr())
+	}
+}
+
+func mustAtoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }

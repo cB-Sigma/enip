@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -339,19 +340,51 @@ func (s *Server) serveUDP(pc *net.UDPConn) {
 		if silent {
 			continue
 		}
-		_, _ = pc.WriteToUDP(h.Marshal(s.identityBody()), from)
+		_, _ = pc.WriteToUDP(h.Marshal(s.identityBody(pc.LocalAddr(), from)), from)
 	}
 }
 
-func (s *Server) identityBody() []byte {
+// identityBody is the ListIdentity reply body for a request that arrived
+// on our address local from peer. Its socket address is the TCP port we
+// listen on and the address the request reached: the listen address when
+// it names an interface, else local's, else (a UDP socket on every
+// interface) the interface that routes to peer.
+func (s *Server) identityBody(local, peer net.Addr) []byte {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	id := s.identity
-	host, _, _ := net.SplitHostPort(s.addr)
-	id.IP = host
-	id.Port = enip.DefaultPort
+	id, addr := s.identity, s.addr
 	major, minor := s.revision()
-	return enip.MarshalCPF(enip.Item{Type: enip.ItemIdentity, Data: enip.IdentityItem(id, major, minor, s.serialNum)})
+	serial := s.serialNum
+	s.mu.Unlock()
+	host, port, _ := net.SplitHostPort(addr)
+	ip := net.ParseIP(host)
+	if ip == nil || ip.IsUnspecified() {
+		ip = addrIP(local)
+	}
+	if (ip == nil || ip.IsUnspecified()) && peer != nil {
+		if c, err := net.Dial("udp4", peer.String()); err == nil {
+			ip = addrIP(c.LocalAddr())
+			_ = c.Close()
+		}
+	}
+	id.IP = ""
+	if ip != nil {
+		id.IP = ip.String()
+	}
+	if p, err := strconv.Atoi(port); err == nil {
+		id.Port = uint16(p)
+	}
+	return enip.MarshalCPF(enip.Item{Type: enip.ItemIdentity, Data: enip.IdentityItem(id, major, minor, serial)})
+}
+
+// addrIP is the IP of a TCP or UDP address, or nil.
+func addrIP(a net.Addr) net.IP {
+	switch a := a.(type) {
+	case *net.TCPAddr:
+		return a.IP
+	case *net.UDPAddr:
+		return a.IP
+	}
+	return nil
 }
 
 // revision is the identity object's revision (attribute 4); s.mu held.
@@ -398,7 +431,7 @@ func (s *Server) serve(c net.Conn) {
 			return
 		case enip.CmdListIdentity:
 			s.count(func(st *Stats) { st.ListIdentityTCP++ })
-			reply = s.identityBody()
+			reply = s.identityBody(c.LocalAddr(), c.RemoteAddr())
 		case enip.CmdSendRRData, enip.CmdSendUnitData:
 			if h.Session != session || session == 0 {
 				h.Status = 0x64
