@@ -6,6 +6,7 @@ package server_test
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -216,5 +217,35 @@ func TestTagNamesIgnoreCase(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("Counter listed %d times", n)
+	}
+}
+
+// An Unconnected Send with an empty route path is answered when the
+// adapter answers directly (RequireRoute false); an Ethernet module
+// (RequireRoute) still refuses it (issue #5).
+func TestUnconnectedSendEmptyRoute(t *testing.T) {
+	le := binary.LittleEndian
+	for _, require := range []bool{false, true} {
+		s := server.New()
+		s.RequireRoute = require
+		s.SetTag("Counter", enip.Type{Code: enip.TypeDINT}, 1, le.AppendUint32(nil, 42))
+		c := startServer(t, s)
+		c.Route = []byte{} // Unconnected Send with route path size 0
+		_, data, err := c.ReadTag(ctx(t), "Counter", 1)
+		var e *enip.Error
+		switch {
+		case !require && (err != nil || le.Uint32(data) != 42):
+			t.Errorf("empty route refused: %x %v", data, err)
+		case require && (!errors.As(err, &e) || e.Status != enip.StatusConnFailure || len(e.Ext) != 1 || e.Ext[0] != 0x0312):
+			t.Errorf("empty route with RequireRoute: %x %v", data, err)
+		}
+		c.Route = []byte{0x01, 0x03} // the wrong slot
+		if _, _, err := c.ReadTag(ctx(t), "Counter", 1); !errors.As(err, &e) || e.Status != enip.StatusConnFailure || e.Ext[0] != 0x0312 {
+			t.Errorf("wrong slot: %v", err)
+		}
+		if st := s.Stats(); st.UnconnectedSends != 2 {
+			t.Errorf("%d Unconnected Sends", st.UnconnectedSends)
+		}
+		s.Stop()
 	}
 }

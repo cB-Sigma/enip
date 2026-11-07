@@ -563,7 +563,10 @@ func (s *Server) unconnectedSend(data []byte) []byte {
 	if err != nil {
 		return enip.MarshalResponse(enip.SvcUnconnectedSend, enip.StatusNotEnoughData, nil, nil)
 	}
-	if len(route) != 2 || route[0] != 0x01 || route[1] != s.Slot {
+	// The route is port 1, the CPU slot; an empty one reaches the CPU too
+	// when it answers directly (RequireRoute false).
+	toSlot := len(route) == 2 && route[0] == 0x01 && route[1] == s.Slot
+	if !toSlot && (len(route) != 0 || s.RequireRoute) {
 		return enip.MarshalResponse(enip.SvcUnconnectedSend, enip.StatusConnFailure, []uint16{0x0312}, []byte{0, 0})
 	}
 	return s.routedHandle(msg)
