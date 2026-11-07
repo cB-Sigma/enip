@@ -632,6 +632,13 @@ func (s *Server) forwardClose(d []byte) []byte {
 			found = true
 		}
 	}
+	for k, c := range s.ioConns {
+		if c.serial == serial { // a class 1 connection: its producer stops
+			close(c.stop)
+			delete(s.ioConns, k)
+			found = true
+		}
+	}
 	s.mu.Unlock()
 	if !found {
 		return enip.MarshalResponse(enip.SvcForwardClose, enip.StatusConnFailure, []uint16{0x0107}, append(append([]byte(nil), d[2:10]...), 0, 0))
