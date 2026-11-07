@@ -349,10 +349,12 @@ func (s *Server) templateBytes(d *StructDef) []byte {
 	return b
 }
 
-// defSize is the template's object definition size in 32-bit words, read
-// so that words×4 − 21 octets cover the template data (the way Logix
-// clients ask for it).
-func defSize(n int) uint32 { return uint32((n + 21 + 3) / 4) }
+// defSize is the template's object definition size in 32-bit words
+// (attribute 4) for n octets of template data. Logix clients derive the
+// octets to read from it: words×4 − 23 (pylogix, rounded up to a
+// multiple of 4) or words×4 − 21 (pycomm3, this module), so the words
+// are chosen so that even the smaller reading covers the data.
+func defSize(n int) uint32 { return uint32((n + 23 + 3) / 4) }
 
 // templateService answers Get_Attribute_List and Read Template on a
 // template instance.
@@ -397,8 +399,11 @@ func (s *Server) templateService(svc byte, inst uint16, d []byte, limit int) []b
 			return enip.MarshalResponse(svc, enip.StatusNotEnoughData, nil, nil)
 		}
 		off, n := int(le.Uint32(d)), int(le.Uint16(d[4:]))
-		if off > len(tb) {
-			return enip.MarshalResponse(svc, enip.StatusTooMuchData, nil, nil)
+		if off >= len(tb) {
+			// Nothing at or past the end: the offset is beyond the data,
+			// as a fragmented read beyond a tag is answered (a success
+			// with no data kept pylogix 1.1.6 asking for ever).
+			return enip.MarshalResponse(svc, enip.StatusVendor, []uint16{0x2104}, nil)
 		}
 		chunk := tb[off:]
 		status := byte(0)

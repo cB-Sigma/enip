@@ -4,6 +4,7 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"math"
@@ -172,5 +173,48 @@ func TestMembersAndInstances(t *testing.T) {
 	r, err := c.Do(ctx(t), enip.SvcReadTag, path, []byte{1, 0})
 	if err != nil || r.Status != 0 || math.Float32frombits(binary.LittleEndian.Uint32(r.Data[2:])) != 12.5 {
 		t.Errorf("Flow by instance %d: %+v %v", flow, r, err)
+	}
+}
+
+// A template's definition size (attribute 4) covers its data in the
+// words×4 − 23 reading as well as the words×4 − 21 one, and a Read
+// Template at the end of the data is an error, not an empty success
+// (issue #7).
+func TestTemplateSizeAndEnd(t *testing.T) {
+	s := newController(t)
+	c := &enip.Client{Addr: s.Addr(), Timeout: 2 * time.Second}
+	defer c.Close()
+	le := binary.LittleEndian
+	for _, inst := range []uint16{0x0FCE, 0x100, 0x101} { // STRING, PID, Motor
+		path := enip.Logical(server.ClassTemplate, inst, -1)
+		r, err := c.Do(ctx(t), server.SvcGetAttributeList, path, []byte{1, 0, 4, 0})
+		if err != nil || r.Status != 0 || len(r.Data) != 10 {
+			t.Fatalf("template %#x attribute 4: %+v %v", inst, r, err)
+		}
+		words := int(le.Uint32(r.Data[6:]))
+		read := func(off, n int) *enip.Response {
+			r, err := c.Do(ctx(t), server.SvcReadTemplate, path, le.AppendUint16(le.AppendUint32(nil, uint32(off)), uint16(n)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return r
+		}
+		all := read(0, words*4-21) // pycomm3's and this module's request
+		if all.Status != 0 || len(all.Data) == 0 {
+			t.Fatalf("template %#x: %+v", inst, all)
+		}
+		if words*4-23 < len(all.Data) {
+			t.Errorf("template %#x: %d words cover %d octets, data is %d", inst, words, words*4-23, len(all.Data))
+		}
+		first := read(0, (words*4-23+3)/4*4) // pylogix's request
+		if first.Status != 0 || !bytes.Equal(first.Data, all.Data) {
+			t.Errorf("template %#x read with pylogix's count: %+v", inst, first)
+		}
+		if r := read(len(all.Data), 2); r.Status == 0 || r.Status == enip.StatusPartial {
+			t.Errorf("template %#x read at its end (%d): %+v", inst, len(all.Data), r)
+		}
+		if r := read(len(all.Data)+2, 2); r.Status == 0 || r.Status == enip.StatusPartial {
+			t.Errorf("template %#x read past its end: %+v", inst, r)
+		}
 	}
 }
