@@ -136,15 +136,15 @@ type view struct {
 	bit      int // a BOOL member's bit in data[0]; -1 otherwise
 }
 
-// resolve finds a tag, or a member path into a structure tag ("Tag.A.B");
-// s.mu held.
+// resolve finds a tag, or a member path into a structure tag ("Tag.A.B"),
+// ignoring case; s.mu held.
 func (s *Server) resolve(name string) (*view, bool) {
-	if t := s.tags[name]; t != nil {
+	if t := s.tags[tagKey(name)]; t != nil {
 		return &view{typ: t.Type, data: t.Data, elements: t.Elements, ro: t.ReadOnly, bit: -1}, true
 	}
 	parts := strings.Split(name, ".")
 	for i := len(parts) - 1; i >= 1; i-- {
-		t := s.tags[strings.Join(parts[:i], ".")]
+		t := s.tags[tagKey(strings.Join(parts[:i], "."))]
 		if t == nil || !t.Type.IsStruct() {
 			continue
 		}
@@ -218,9 +218,9 @@ func (s *Server) symbols(program string) []symbol {
 		case program == "" && scoped:
 			programs[prog] = true
 		case program == "" && !scoped:
-			out = append(out, symbol{uint32(i + 1), name, s.tags[name]})
+			out = append(out, symbol{uint32(i + 1), name, s.tags[tagKey(name)]})
 		case scoped && strings.EqualFold(prog, program):
-			out = append(out, symbol{uint32(i + 1), short, s.tags[name]})
+			out = append(out, symbol{uint32(i + 1), short, s.tags[tagKey(name)]})
 		}
 	}
 	if program == "" {

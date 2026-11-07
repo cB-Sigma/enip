@@ -6,6 +6,7 @@ package server_test
 import (
 	"bytes"
 	"encoding/binary"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,5 +170,51 @@ func TestForwardCloseIO(t *testing.T) {
 	r, err = c.Do(ctx(t), enip.SvcForwardClose, cm, forwardClose(0x4242, path))
 	if err != nil || r.Status != enip.StatusConnFailure || len(r.Ext) != 1 || r.Ext[0] != 0x0107 {
 		t.Errorf("second Forward Close: %+v, %v", r, err)
+	}
+}
+
+// Tag names are not case-sensitive, as in Logix: a tag created as
+// "Counter" is read and written as "counter", also in a program scope
+// and through members, while the tag list keeps its spelling (issue #4).
+func TestTagNamesIgnoreCase(t *testing.T) {
+	s := newController(t)
+	le := binary.LittleEndian
+	s.SetTag("Counter", enip.Type{Code: enip.TypeDINT}, 1, le.AppendUint32(nil, 42))
+	c := &enip.Client{Addr: s.Addr(), Timeout: 2 * time.Second}
+	defer c.Close()
+	for _, name := range []string{"Counter", "counter", "COUNTER", "program:main.count"} {
+		if ty, data, err := c.ReadTag(ctx(t), name, 1); err != nil || ty.Code != enip.TypeDINT || le.Uint32(data) != 42 {
+			t.Errorf("read %q: %v %x %v", name, ty, data, err)
+		}
+	}
+	if ty, data, err := c.ReadTag(ctx(t), "PUMP.speed", 1); err != nil || ty.Code != enip.TypeREAL || len(data) != 4 {
+		t.Errorf("read a member by another case: %v %x %v", ty, data, err)
+	}
+	if err := c.WriteTag(ctx(t), "cOUNTER", enip.Type{Code: enip.TypeDINT}, 1, le.AppendUint32(nil, 7)); err != nil {
+		t.Errorf("write: %v", err)
+	}
+	if d := s.TagData("COUNTER"); len(d) != 4 || le.Uint32(d) != 7 {
+		t.Errorf("TagData by another case: %x", d)
+	}
+	s.SetReadOnly("counter", true)
+	if err := c.WriteTag(ctx(t), "Counter", enip.Type{Code: enip.TypeDINT}, 1, le.AppendUint32(nil, 8)); err == nil {
+		t.Error("SetReadOnly by another case had no effect")
+	}
+	s.SetTag("COUNTER", enip.Type{Code: enip.TypeDINT}, 1, le.AppendUint32(nil, 9))
+	tags, err := c.ListTags(ctx(t), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, ti := range tags {
+		if strings.EqualFold(ti.Name, "Counter") {
+			n++
+			if ti.Name != "Counter" {
+				t.Errorf("listed as %q", ti.Name)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("Counter listed %d times", n)
 	}
 }

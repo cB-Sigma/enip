@@ -134,23 +134,29 @@ func (s *Server) SetIdentity(id enip.Identity, serial uint32) {
 }
 
 // SetTag creates or replaces a tag. A name "Program:<program>.<tag>" is a
-// program-scoped tag. A structure tag's Type.Handle names a structure
-// given to DefineStruct (or the built-in STRING) for browsing and member
-// access; others are served as raw bytes.
+// program-scoped tag. Names are not case-sensitive (as in Logix): a
+// tag is listed with the spelling it was created with and found by any.
+// A structure tag's Type.Handle names a structure given to DefineStruct
+// (or the built-in STRING) for browsing and member access; others are
+// served as raw bytes.
 func (s *Server) SetTag(name string, t enip.Type, elements int, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.tags[name]; !ok {
+	if _, ok := s.tags[tagKey(name)]; !ok {
 		s.order = append(s.order, name)
 	}
-	s.tags[name] = &Tag{Type: t, Elements: elements, Data: append([]byte(nil), data...)}
+	s.tags[tagKey(name)] = &Tag{Type: t, Elements: elements, Data: append([]byte(nil), data...)}
 }
+
+// tagKey is the key of a tag name in s.tags: its lower-case form, so
+// that lookups ignore case.
+func tagKey(name string) string { return strings.ToLower(name) }
 
 // SetReadOnly makes a tag refuse writes (privilege violation).
 func (s *Server) SetReadOnly(name string, ro bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if t := s.tags[name]; t != nil {
+	if t := s.tags[tagKey(name)]; t != nil {
 		t.ReadOnly = ro
 	}
 }
@@ -166,7 +172,7 @@ func (s *Server) SetAttr(k AttrKey, a Attr) {
 func (s *Server) TagData(name string) []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if t := s.tags[name]; t != nil {
+	if t := s.tags[tagKey(name)]; t != nil {
 		return append([]byte(nil), t.Data...)
 	}
 	return nil
