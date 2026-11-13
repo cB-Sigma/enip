@@ -82,12 +82,89 @@ func TestImplicitIO(t *testing.T) {
 		}
 	}
 
-	// The scanner goes silent: the adapter drops the connection after
-	// RPI × 16, and the scanner's own timeout fires once inputs stop.
+	// The scanner closes the connection: its Forward Close ends it at the
+	// adapter.
 	io.Close()
 	time.Sleep(600 * time.Millisecond)
 	if n := s.IOConnections(); n != 0 {
 		t.Errorf("%d I/O connections after the scanner stopped", n)
+	}
+}
+
+// Closing an I/O connection sends its Forward Close: the adapter ends the
+// connection at once instead of after its timeout, and a second Close
+// sends no second one.
+func TestIOCloseSendsForwardClose(t *testing.T) {
+	s := server.New()
+	s.IOAddr = "127.0.0.1:0"
+	s.AddAssembly(100, 8)
+	s.AddAssembly(150, 4)
+	s.AddAssembly(1, 0)
+	if err := s.Start("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	c := &enip.Client{Addr: s.Addr(), Timeout: 2 * time.Second}
+	defer c.Close()
+	// RPI × 16 is 16 s: a connection gone before that was closed, not
+	// timed out.
+	cfg := enip.IOConfig{ConfigInstance: 1, OutputInstance: 150, InputInstance: 100, OutputSize: 4, InputSize: 8,
+		RPI: time.Second, LocalUDP: "127.0.0.1:0", AdapterUDPPort: 1}
+	io, err := c.OpenIO(ctx(t), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := s.IOConnections(); n != 1 {
+		t.Fatalf("%d I/O connections after the Forward Open", n)
+	}
+	before := s.Stats().ForwardCloses
+	if err := io.Shutdown(); err != nil {
+		t.Errorf("Shutdown: %v", err)
+	}
+	if n := s.IOConnections(); n != 0 {
+		t.Errorf("%d I/O connections after Close", n)
+	}
+	if n := s.Stats().ForwardCloses - before; n != 1 {
+		t.Errorf("%d Forward Closes after Close, want 1", n)
+	}
+	if err := io.Shutdown(); err != nil {
+		t.Errorf("second Shutdown: %v", err)
+	}
+	io.Close()
+	if n := s.Stats().ForwardCloses - before; n != 1 {
+		t.Errorf("%d Forward Closes after a second Close, want 1", n)
+	}
+}
+
+// An I/O connection closed after its client sends no Forward Close (there
+// is no session to send it on) and does not reconnect.
+func TestIOCloseAfterClientClose(t *testing.T) {
+	s := server.New()
+	s.IOAddr = "127.0.0.1:0"
+	s.AddAssembly(100, 8)
+	s.AddAssembly(150, 4)
+	s.AddAssembly(1, 0)
+	if err := s.Start("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	c := &enip.Client{Addr: s.Addr(), Timeout: 2 * time.Second}
+	cfg := enip.IOConfig{ConfigInstance: 1, OutputInstance: 150, InputInstance: 100, OutputSize: 4, InputSize: 8,
+		RPI: time.Second, LocalUDP: "127.0.0.1:0", AdapterUDPPort: 1}
+	io, err := c.OpenIO(ctx(t), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	sessions := s.Stats().Sessions
+	if err := io.Shutdown(); !errors.Is(err, enip.ErrNoSession) {
+		t.Errorf("Shutdown after the client's Close: %v, want ErrNoSession", err)
+	}
+	if n := s.Stats().ForwardCloses; n != 0 {
+		t.Errorf("%d Forward Closes, want 0", n)
+	}
+	if n := s.Stats().Sessions; n != sessions {
+		t.Errorf("Close reconnected: %d sessions, was %d", n, sessions)
 	}
 }
 
