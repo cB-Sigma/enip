@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `IOConn.Close` sends a Forward Close for its class 1 connection through
+  the client's session, so the adapter ends the connection at once
+  instead of after its timeout; it now waits for the answer, for at most
+  the client's `Timeout`. New `IOConn.Shutdown` does the same and returns
+  the Forward Close's result; new `ErrNoSession` when the client was
+  closed first. Neither reconnects. Reported and fixed by @boeboe
+  (#9, #10).
+
 ## v0.2.1 (2026-11-07)
 
 Fixes to the adapter (`server`), all found by @boeboe with the
