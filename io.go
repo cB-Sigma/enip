@@ -58,6 +58,12 @@ type IOConn struct {
 	peer   *net.UDPAddr
 	ot, to uint32
 
+	// serial, origSer and path identify the connection in its Forward
+	// Close (the connection triad and the Forward Open's path).
+	serial  uint16
+	origSer uint32
+	path    []byte
+
 	mu       sync.Mutex
 	out      []byte
 	run      bool
@@ -68,6 +74,7 @@ type IOConn struct {
 	received chan struct{}
 	done     chan struct{}
 	once     sync.Once
+	closed   sync.Once
 }
 
 // OpenIO opens a class 1 connection through the client's session (its
@@ -151,13 +158,13 @@ func (c *Client) forwardOpenIO(ctx context.Context, io *IOConn, port int) (*Resp
 	}
 	cfg := io.cfg
 	le := binary.LittleEndian
-	serial := uint16(rand.Uint32())
+	io.serial, io.origSer = uint16(rand.Uint32()), rand.Uint32()
 	b := []byte{priorityTick, timeoutTicks}
 	b = le.AppendUint32(b, 0) // O→T ID: the adapter chooses
 	b = le.AppendUint32(b, io.to)
-	b = le.AppendUint16(b, serial)
+	b = le.AppendUint16(b, io.serial)
 	b = le.AppendUint16(b, originatorVendor)
-	b = le.AppendUint32(b, rand.Uint32())
+	b = le.AppendUint32(b, io.origSer)
 	b = append(b, cfg.Multiplier, 0, 0, 0)
 	rpi := uint32(cfg.RPI / time.Microsecond)
 	// Point-to-point, scheduled priority, fixed size; O→T counts the
@@ -171,6 +178,7 @@ func (c *Client) forwardOpenIO(ctx context.Context, io *IOConn, port int) (*Resp
 	path = append(path, logical(logical(nil, 0x20, uint32(ClassAssembly)), 0x24, uint32(cfg.ConfigInstance))...)
 	path = append(path, logical(nil, 0x2C, uint32(cfg.OutputInstance))...)
 	path = append(path, logical(nil, 0x2C, uint32(cfg.InputInstance))...)
+	io.path = path
 	b = append(b, byte(len(path)/2))
 	b = append(b, path...)
 	msg := Request(SvcForwardOpen, Logical(ClassConnectionManager, 1, -1), b)
@@ -335,9 +343,48 @@ func (io *IOConn) Err() error {
 	return io.err
 }
 
-// Close stops sending and closes the UDP socket. The adapter drops the
-// connection when its timeout passes (a Forward Close is not sent).
-func (io *IOConn) Close() {
+// Close stops sending, sends a Forward Close for the connection through
+// the client's session and closes the UDP socket. It is Shutdown without
+// the Forward Close's result.
+func (io *IOConn) Close() { _ = io.Shutdown() }
+
+// ErrNoSession is returned by Shutdown when the client has no session
+// to send the Forward Close on (it was closed first); the adapter then
+// drops the connection when its timeout passes.
+var ErrNoSession = errors.New("enip: no session to send the Forward Close on")
+
+// Shutdown stops sending, sends a Forward Close for the connection
+// through the client's session (it does not reconnect) and closes the UDP
+// socket. It returns the Forward Close's result: nil when the adapter
+// answered success, an *Error when it refused, ErrNoSession or the
+// transport's error otherwise. The connection ends either way; a second
+// call does nothing and returns nil.
+func (io *IOConn) Shutdown() error {
 	io.once.Do(func() { close(io.done) })
-	_ = io.udp.Close()
+	var err error
+	io.closed.Do(func() {
+		err = io.c.forwardCloseIO(io)
+		_ = io.udp.Close()
+	})
+	return err
+}
+
+// forwardCloseIO sends the Forward Close of a class 1 connection.
+func (c *Client) forwardCloseIO(io *IOConn) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return ErrNoSession
+	}
+	b := []byte{priorityTick, timeoutTicks}
+	b = binary.LittleEndian.AppendUint16(b, io.serial)
+	b = binary.LittleEndian.AppendUint16(b, originatorVendor)
+	b = binary.LittleEndian.AppendUint32(b, io.origSer)
+	b = append(b, byte(len(io.path)/2), 0)
+	b = append(b, io.path...)
+	r, err := c.sendRRLocked(Request(SvcForwardClose, Logical(ClassConnectionManager, 1, -1), b))
+	if err != nil {
+		return err
+	}
+	return r.Err()
 }
